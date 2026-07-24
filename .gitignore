@@ -1,0 +1,26 @@
+# Виртуальное окружение
+myenv/
+venv/
+.venv/
+
+# База данных (если SQLite)
+db.sqlite3
+
+# Python кэши и байт-код
+__pycache__/
+*.pyc
+*.pyo
+
+# Медиа и статика (если генерируются)
+media/
+staticfiles/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Лог-файлы и временные файлы
+*.log
+.DS_Store
