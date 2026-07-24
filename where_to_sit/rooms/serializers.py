@@ -1,8 +1,10 @@
 from rest_framework import serializers
 from .models import Room, Booking
+from datetime import timedelta
 from django.utils import timezone
 from django.db.models import Sum, F
 from django.db.models.functions import Coalesce
+from django.db.models.fields import DurationField
 
 class RoomSerializer(serializers.ModelSerializer):
     class Meta:
@@ -27,14 +29,15 @@ class BookingSerializer(serializers.ModelSerializer):
 
         # 1. Время в будущем, end > start
         if start <= now:
-            raise serializers.ValidationError("Время начала должно быть в будущем.")
+            raise serializers.ValidationError("Нельзя бронировать время, которое уже в прошлом.")
         if end <= start:
             raise serializers.ValidationError("Время окончания должно быть строго позже времени начала.")
 
         # 2. Длительность <= 3 часа
-        duration_minutes = (end - start).total_seconds() / 60
-        if duration_minutes > 180:
-            raise serializers.ValidationError("Одно бронирование не может длиться более 3 часов.")
+        # Объявляем duration здесь — это ключевой объект timedelta
+        duration = end - start
+        if duration > timedelta(hours=3):
+            raise serializers.ValidationError("Превышен лимит длительности: одно бронирование не более 3 часов.")
 
         # 3. Проверка пересечений с другими бронированиями этой комнаты
         overlapping = Booking.objects.filter(
@@ -45,33 +48,35 @@ class BookingSerializer(serializers.ModelSerializer):
         if overlapping.exists():
             raise serializers.ValidationError("Комната уже забронирована на это время (пересечение).")
 
-        # 4. Суммарное время бронирований пользователя за календарный день (00:00–23:59)
+        # 4. Суммарное время бронирований пользователя за календарный день
         day_start = start.replace(hour=0, minute=0, second=0, microsecond=0)
-        day_end = day_start.replace(hour=23, minute=59, second=59, microsecond=999999)
+        day_end = day_start + timedelta(days=1)
 
         existing_bookings = Booking.objects.filter(
             user=user,
             start__gte=day_start,
-            start__lte=day_end,
+            start__lt=day_end,
         )
 
-        total_minutes_existing = existing_bookings.aggregate(
-            total=Coalesce(Sum(F('end') - F('start')), 0)
+        # Агрегация с явным указанием типа
+        total_duration_existing = existing_bookings.aggregate(
+            total=Coalesce(
+                Sum(F('end') - F('start')), 
+                timedelta(0), 
+                output_field=DurationField()
+            )
         )['total']
-        if total_minutes_existing is None:
-            total_minutes_existing = 0
 
-        # Конвертируем timedelta в минуты
-        if isinstance(total_minutes_existing, int | float):
-            # на случай, если агрегация вернула число (редко, но бывает в тестах)
-            pass
-        else:
-            total_minutes_existing = total_minutes_existing.total_seconds() / 60 if hasattr(total_minutes_existing, 'total_seconds') else 0
+        # ГАРАНТИРУЕМ, что переменная не None. Это уберёт подчёркивание и защитит от краша.
+        if total_duration_existing is None:
+            total_duration_existing = timedelta(0)
 
-        new_duration_minutes = duration_minutes
-        if (total_minutes_existing + new_duration_minutes) > 240:  # 4 часа = 240 минут
+        # Теперь .total_seconds() безопасен
+        total_minutes = (total_duration_existing.total_seconds() + duration.total_seconds()) / 60 # type: ignore
+    
+        if total_minutes > 240:
             raise serializers.ValidationError(
-                "Суммарное время ваших бронирований в течение дня не может превышать 4 часов."
+                "Превышен дневной лимит пользователя: суммарно не более 4 часов в день."
             )
 
         return data
