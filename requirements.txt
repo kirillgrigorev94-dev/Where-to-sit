@@ -1,0 +1,5 @@
+django>=4.2
+djangorestframework
+djangorest_framework.authtoken
+pytest
+pytest-django
